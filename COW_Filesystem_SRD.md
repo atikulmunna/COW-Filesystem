@@ -82,6 +82,8 @@ Modern filesystems like ZFS and Btrfs implement COW at the kernel level. Docker 
 - **Whole-file COW on large files**: COWFS uses whole-file copy-on-write — writing 1 byte to a 500MB file re-hashes and re-stores the entire 500MB. This is acceptable for typical document/config/code workloads but not suitable for large binary blob editing (e.g., video files). Block-level COW (like ZFS) is a future consideration.
 - **Single-process write safety**: If two processes write to different offsets of the same file simultaneously, the read-modify-write cycle in the `write()` handler may cause one write to clobber the other. A per-inode write lock serializes concurrent writes to the same file within the FUSE handler.
 - **No hardlink support**: Files are identified by inode, but multiple hardlinks to the same inode are not supported in v1. `link()` returns `ENOTSUP`.
+- **No symlink or extended attribute support**: `symlink()`, `readlink()`, `getxattr()`, `setxattr()`, `listxattr()`, and `removexattr()` all return `ENOTSUP` in v1.
+- **No concurrent mount protection**: Two `cowfs mount` processes pointing at the same `storage_dir` would corrupt the SQLite database. An exclusive `flock()` on `storage_dir/.cowfs.lock` is acquired during mount and released on unmount. A second mount attempt against a locked storage directory fails with a clear error message.
 
 ---
 
@@ -436,7 +438,13 @@ cowfs gc --keep-last 3
         └── a2f1a3d7e4b1...
 ```
 
-**Format marker file (`.cowfs`)**: A small JSON file at the storage root that identifies the directory as a valid COWFS storage backend and records the format version. `cowfs mount` checks for this file and refuses to mount if it is missing (preventing accidental mounts of arbitrary directories) or if the format version is unsupported.
+**Format marker file (`.cowfs`)**: A small JSON file at the storage root that identifies the directory as a valid COWFS storage backend and records the format version and hash algorithm. `cowfs mount` checks for this file and refuses to mount if it is missing (preventing accidental mounts of arbitrary directories) or if the format version is unsupported.
+
+```json
+{"version": 1, "created": "2026-02-23T10:00:00", "hash_algo": "sha256"}
+```
+
+The `hash_algo` field is written at storage creation time and is immutable. Attempting to mount with `--hash-algo blake3` against a storage directory created with `sha256` will fail with an error. Migrating between hash algorithms requires a dedicated migration tool (out of scope for v1).
 
 **Why prefix sharding?** Filesystems slow down dramatically with thousands of files in a single directory. Using the first 2 hex chars as a subdirectory (256 possible subdirs) keeps each directory bounded. This is exactly how git's `.git/objects/` is organized.
 
@@ -562,10 +570,16 @@ CREATE INDEX idx_files_parent ON files(parent_id, name);  -- fast lookup() resol
 | `unlink` | `rm` | Soft delete | Set `is_deleted=True` on file, decrement ref_count |
 | `mkdir` | `mkdir` | Pass-through | Create directory entry in `files` (`is_dir=TRUE`) |
 | `rmdir` | `rmdir` | Pass-through | Remove if empty (no children with `is_deleted=FALSE`) |
-| `rename` | `mv` | Update path | Update `parent_id`, `name`, and `path` in `files` table |
+| `rename` | `mv` | Update path | Update `parent_id`, `name`, `path` in `files` table. **For directories, recursively update `path` of all descendants** via `UPDATE files SET path = new_prefix \|\| substr(path, len(old_prefix)+1) WHERE path LIKE old_prefix \|\| '/%'` |
 | `truncate` | `truncate()` | **Buffer** | Truncate in-memory buffer (version created on flush) |
-| `flush` | File close / `fsync()` | **COW** | Hash buffer → store object → create version → commit to SQLite |
+| `fsync` | `fsync()` | **COW** | If buffer is dirty, hash buffer → store object → create version → commit to SQLite. Distinct from `flush` — apps calling `fsync()` explicitly (databases, editors) trigger this, not `flush` |
+| `flush` | File close | **COW** | Hash buffer → store object → create version → commit to SQLite |
 | `release` | Last handle closed | **COW** | Final flush if dirty; deallocate write buffer and file handle |
+| `symlink` | `ln -s` | **Unsupported** | Returns `ENOTSUP` |
+| `readlink` | readlink() | **Unsupported** | Returns `ENOTSUP` |
+| `link` | `ln` | **Unsupported** | Returns `ENOTSUP` |
+| `getxattr` | getxattr() | **Unsupported** | Returns `ENOTSUP` |
+| `setxattr` | setxattr() | **Unsupported** | Returns `ENOTSUP` |
 | `statfs` | `df` | Stats | Return storage usage stats from SQLite |
 
 ### Implementation Skeleton (Python/pyfuse3)
@@ -601,13 +615,15 @@ class COWFS(pyfuse3.Operations):
     def _object_path(self, obj_hash: str) -> Path:
         return self.objects_dir / obj_hash[:2] / obj_hash[2:]
 
-    def _store_object(self, data: bytes) -> str:
+    async def _store_object(self, data: bytes) -> str:
+        """Store object in content-addressable store. Uses asyncio.to_thread()
+        to avoid blocking the pyfuse3 event loop with synchronous I/O."""
         obj_hash = self._compute_hash(data)
         obj_path = self._object_path(obj_hash)
         if not obj_path.exists():
             obj_path.parent.mkdir(parents=True, exist_ok=True)
-            obj_path.write_bytes(data)
-            # fsync for durability
+            await asyncio.to_thread(obj_path.write_bytes, data)
+            # fsync for durability (also offloaded to thread)
             with open(obj_path, 'rb') as f:
                 os.fsync(f.fileno())
         return obj_hash
@@ -632,7 +648,17 @@ class COWFS(pyfuse3.Operations):
                 return  # nothing to flush
             new_data = bytes(self._write_buffers.pop(inode))
         # COW: store new object, create new version
-        object_hash = self._store_object(new_data)
+        object_hash = await self._store_object(new_data)
+        await self._create_version(inode, object_hash, len(new_data))
+
+    async def fsync(self, fh, datasync):
+        """Explicit fsync — commits dirty buffer as a new version, distinct from flush."""
+        inode = self._fh_to_inode(fh)
+        async with self._inode_locks[inode]:
+            if inode not in self._write_buffers:
+                return  # nothing to sync
+            new_data = bytes(self._write_buffers.pop(inode))
+        object_hash = await self._store_object(new_data)
         await self._create_version(inode, object_hash, len(new_data))
 
     async def read(self, fh, offset, length):

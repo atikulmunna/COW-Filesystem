@@ -1,0 +1,356 @@
+"""SQLite metadata layer for COWFS.
+
+Manages all metadata: files (inodes), versions, objects, snapshots.
+Uses synchronous sqlite3 — pyfuse3 runs on Trio, and SQLite on local disk
+is fast enough that thread offloading is only needed for bulk operations.
+"""
+
+import sqlite3
+from pathlib import Path
+
+SCHEMA_SQL = """
+-- Format version tracking (checked on mount)
+CREATE TABLE IF NOT EXISTS format_version (
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Logical files (paths in the mounted filesystem)
+CREATE TABLE IF NOT EXISTS files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER NOT NULL DEFAULT 1,
+    name TEXT NOT NULL,
+    path TEXT UNIQUE NOT NULL,
+    is_dir BOOLEAN DEFAULT FALSE,
+    current_version_id INTEGER,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    mode INTEGER DEFAULT 33188,
+    uid INTEGER DEFAULT 0,
+    gid INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Version history per file
+CREATE TABLE IF NOT EXISTS versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id INTEGER NOT NULL REFERENCES files(id),
+    object_hash TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    FOREIGN KEY (object_hash) REFERENCES objects(hash)
+);
+
+-- Content-addressable objects
+CREATE TABLE IF NOT EXISTS objects (
+    hash TEXT PRIMARY KEY,
+    size_bytes INTEGER NOT NULL,
+    ref_count INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Named filesystem snapshots
+CREATE TABLE IF NOT EXISTS snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Maps each snapshot to the version of each file at snapshot time
+CREATE TABLE IF NOT EXISTS snapshot_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
+    file_id INTEGER NOT NULL REFERENCES files(id),
+    version_id INTEGER NOT NULL REFERENCES versions(id)
+);
+
+-- Performance indexes
+CREATE INDEX IF NOT EXISTS idx_versions_file_id ON versions(file_id);
+CREATE INDEX IF NOT EXISTS idx_versions_object_hash ON versions(object_hash);
+CREATE INDEX IF NOT EXISTS idx_snapshot_entries_snapshot_id ON snapshot_entries(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
+CREATE INDEX IF NOT EXISTS idx_files_parent ON files(parent_id, name);
+"""
+
+ROOT_INODE_SQL = """
+INSERT OR IGNORE INTO files (id, parent_id, name, path, is_dir, mode)
+    VALUES (1, 1, '', '/', TRUE, 16877);
+"""
+
+FORMAT_VERSION_SQL = """
+INSERT INTO format_version (version) SELECT 1
+    WHERE NOT EXISTS (SELECT 1 FROM format_version);
+"""
+
+
+class MetadataDB:
+    """Synchronous SQLite wrapper for COWFS metadata operations."""
+
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = db_path
+        self.db: sqlite3.Connection | None = None
+
+    def connect(self) -> None:
+        self.db = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA foreign_keys=ON")
+        self.db.execute("PRAGMA synchronous=NORMAL")
+
+    def initialize(self) -> None:
+        assert self.db is not None, "Call connect() first"
+        self.db.executescript(SCHEMA_SQL)
+        self.db.execute(ROOT_INODE_SQL)
+        self.db.execute(FORMAT_VERSION_SQL)
+        self.db.commit()
+
+    def close(self) -> None:
+        if self.db:
+            self.db.close()
+            self.db = None
+
+    # ──────────────────────────── File operations ────────────────────────────
+
+    def lookup(self, parent_id: int, name: str) -> sqlite3.Row | None:
+        assert self.db is not None
+        cursor = self.db.execute(
+            "SELECT * FROM files WHERE parent_id = ? AND name = ? AND is_deleted = FALSE",
+            (parent_id, name),
+        )
+        return cursor.fetchone()
+
+    def get_file(self, inode: int) -> sqlite3.Row | None:
+        assert self.db is not None
+        cursor = self.db.execute(
+            "SELECT * FROM files WHERE id = ? AND is_deleted = FALSE", (inode,)
+        )
+        return cursor.fetchone()
+
+    def get_file_by_path(self, path: str) -> sqlite3.Row | None:
+        assert self.db is not None
+        cursor = self.db.execute(
+            "SELECT * FROM files WHERE path = ? AND is_deleted = FALSE", (path,)
+        )
+        return cursor.fetchone()
+
+    def list_children(self, parent_id: int) -> list[sqlite3.Row]:
+        assert self.db is not None
+        cursor = self.db.execute(
+            "SELECT * FROM files WHERE parent_id = ? AND is_deleted = FALSE AND id != ?",
+            (parent_id, parent_id),
+        )
+        return cursor.fetchall()
+
+    def create_file(
+        self,
+        parent_id: int,
+        name: str,
+        path: str,
+        is_dir: bool = False,
+        mode: int = 33188,
+        uid: int = 0,
+        gid: int = 0,
+    ) -> int:
+        assert self.db is not None
+        cursor = self.db.execute(
+            """INSERT INTO files (parent_id, name, path, is_dir, mode, uid, gid)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (parent_id, name, path, is_dir, mode, uid, gid),
+        )
+        self.db.commit()
+        assert cursor.lastrowid is not None
+        return cursor.lastrowid
+
+    def soft_delete_file(self, inode: int) -> None:
+        assert self.db is not None
+        self.db.execute(
+            "UPDATE files SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (inode,),
+        )
+        self.db.commit()
+
+    def rename_file(
+        self, inode: int, new_parent_id: int, new_name: str, new_path: str
+    ) -> None:
+        assert self.db is not None
+        row = self.get_file(inode)
+        if row is None:
+            return
+        old_path = row["path"]
+        is_dir = row["is_dir"]
+
+        self.db.execute(
+            """UPDATE files SET parent_id = ?, name = ?, path = ?,
+               updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+            (new_parent_id, new_name, new_path, inode),
+        )
+        if is_dir:
+            self.db.execute(
+                """UPDATE files SET path = ? || substr(path, ?),
+                   updated_at = CURRENT_TIMESTAMP
+                   WHERE path LIKE ? || '/%'""",
+                (new_path, len(old_path) + 1, old_path),
+            )
+        self.db.commit()
+
+    def update_attrs(
+        self,
+        inode: int,
+        mode: int | None = None,
+        uid: int | None = None,
+        gid: int | None = None,
+    ) -> None:
+        assert self.db is not None
+        if mode is not None:
+            self.db.execute(
+                "UPDATE files SET mode = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (mode, inode),
+            )
+        if uid is not None:
+            self.db.execute(
+                "UPDATE files SET uid = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (uid, inode),
+            )
+        if gid is not None:
+            self.db.execute(
+                "UPDATE files SET gid = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (gid, inode),
+            )
+        self.db.commit()
+
+    def set_current_version(self, inode: int, version_id: int) -> None:
+        assert self.db is not None
+        self.db.execute(
+            "UPDATE files SET current_version_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (version_id, inode),
+        )
+        self.db.commit()
+
+    # ──────────────────────────── Version operations ─────────────────────────
+
+    def create_version(self, file_id: int, object_hash: str, size_bytes: int) -> int:
+        assert self.db is not None
+        self.db.execute(
+            """INSERT INTO objects (hash, size_bytes, ref_count)
+               VALUES (?, ?, 1)
+               ON CONFLICT(hash) DO UPDATE SET ref_count = ref_count + 1""",
+            (object_hash, size_bytes),
+        )
+        cursor = self.db.execute(
+            """INSERT INTO versions (file_id, object_hash, size_bytes)
+               VALUES (?, ?, ?)""",
+            (file_id, object_hash, size_bytes),
+        )
+        version_id = cursor.lastrowid
+        assert version_id is not None
+        self.db.execute(
+            "UPDATE files SET current_version_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (version_id, file_id),
+        )
+        self.db.commit()
+        return version_id
+
+    def get_current_version(self, inode: int) -> sqlite3.Row | None:
+        assert self.db is not None
+        cursor = self.db.execute(
+            """SELECT v.* FROM versions v
+               JOIN files f ON f.current_version_id = v.id
+               WHERE f.id = ? AND f.is_deleted = FALSE""",
+            (inode,),
+        )
+        return cursor.fetchone()
+
+    def get_version(self, version_id: int) -> sqlite3.Row | None:
+        assert self.db is not None
+        cursor = self.db.execute(
+            "SELECT * FROM versions WHERE id = ?", (version_id,)
+        )
+        return cursor.fetchone()
+
+    def list_versions(self, file_id: int) -> list[sqlite3.Row]:
+        assert self.db is not None
+        cursor = self.db.execute(
+            """SELECT * FROM versions WHERE file_id = ? AND is_deleted = FALSE
+               ORDER BY created_at ASC""",
+            (file_id,),
+        )
+        return cursor.fetchall()
+
+    # ──────────────────────────── Object operations ──────────────────────────
+
+    def get_object(self, obj_hash: str) -> sqlite3.Row | None:
+        assert self.db is not None
+        cursor = self.db.execute(
+            "SELECT * FROM objects WHERE hash = ?", (obj_hash,)
+        )
+        return cursor.fetchone()
+
+    def decrement_ref_count(self, obj_hash: str) -> int:
+        assert self.db is not None
+        self.db.execute(
+            "UPDATE objects SET ref_count = ref_count - 1 WHERE hash = ?",
+            (obj_hash,),
+        )
+        self.db.commit()
+        cursor = self.db.execute(
+            "SELECT ref_count FROM objects WHERE hash = ?", (obj_hash,)
+        )
+        row = cursor.fetchone()
+        return row["ref_count"] if row else 0
+
+    def get_orphaned_objects(self) -> list[sqlite3.Row]:
+        assert self.db is not None
+        cursor = self.db.execute(
+            "SELECT * FROM objects WHERE ref_count <= 0"
+        )
+        return cursor.fetchall()
+
+    def delete_object_record(self, obj_hash: str) -> None:
+        assert self.db is not None
+        self.db.execute("DELETE FROM objects WHERE hash = ?", (obj_hash,))
+        self.db.commit()
+
+    # ──────────────────────────── Stats ───────────────────────────────────────
+
+    def get_stats(self) -> dict:
+        assert self.db is not None
+        stats = {}
+
+        cursor = self.db.execute(
+            "SELECT COUNT(*) as c FROM files WHERE is_deleted = FALSE AND is_dir = FALSE"
+        )
+        row = cursor.fetchone()
+        stats["total_files"] = row["c"] if row else 0
+
+        cursor = self.db.execute(
+            "SELECT COUNT(*) as c FROM versions WHERE is_deleted = FALSE"
+        )
+        row = cursor.fetchone()
+        stats["total_versions"] = row["c"] if row else 0
+
+        cursor = self.db.execute("SELECT COUNT(*) as c FROM objects")
+        row = cursor.fetchone()
+        stats["total_objects"] = row["c"] if row else 0
+
+        cursor = self.db.execute(
+            "SELECT COALESCE(SUM(size_bytes), 0) as s FROM objects"
+        )
+        row = cursor.fetchone()
+        stats["actual_size_bytes"] = row["s"] if row else 0
+
+        cursor = self.db.execute(
+            """SELECT COALESCE(SUM(v.size_bytes), 0) as s
+               FROM versions v WHERE v.is_deleted = FALSE"""
+        )
+        row = cursor.fetchone()
+        stats["logical_size_bytes"] = row["s"] if row else 0
+
+        cursor = self.db.execute(
+            "SELECT COUNT(*) as c FROM objects WHERE ref_count <= 0"
+        )
+        row = cursor.fetchone()
+        stats["orphaned_objects"] = row["c"] if row else 0
+
+        return stats
