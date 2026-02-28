@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cowfs"
-version = "0.1.0"
+version = "0.2.0rc1"
 description = "Copy-on-Write Filesystem — a FUSE-based versioning filesystem"
 readme = "README.md"
 license = "MIT"
