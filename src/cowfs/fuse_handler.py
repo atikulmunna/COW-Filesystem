@@ -21,7 +21,7 @@ log = logging.getLogger("cowfs.fuse")
 
 
 class FileHandle:
-    __slots__ = ("inode", "flags", "dirty")
+    __slots__ = ("dirty", "flags", "inode")
 
     def __init__(self, inode: int, flags: int) -> None:
         self.inode = inode
@@ -359,10 +359,6 @@ class COWFS(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EISDIR)
 
         inode = row["id"]
-        version = self.db.get_current_version(inode)
-        if version:
-            self.db.decrement_ref_count(version["object_hash"])
-
         self.db.soft_delete_file(inode)
         self._invalidate_cache(inode)
 
@@ -424,7 +420,9 @@ class COWFS(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         new_parent_path = new_parent["path"]
-        new_path = f"/{new_name_str}" if new_parent_path == "/" else f"{new_parent_path}/{new_name_str}"
+        new_path = (
+            f"/{new_name_str}" if new_parent_path == "/" else f"{new_parent_path}/{new_name_str}"
+        )
 
         dst_row = self.db.lookup(new_parent_inode, new_name_str)
         if dst_row is not None:

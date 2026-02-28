@@ -104,8 +104,8 @@ class TestMetadataDB:
         h2 = "b" * 64
         h3 = "a" * 64  # same as h1 -> dedup
 
-        v1 = db.create_version(inode, h1, 10)
-        v2 = db.create_version(inode, h2, 20)
+        db.create_version(inode, h1, 10)
+        db.create_version(inode, h2, 20)
         v3 = db.create_version(inode, h3, 10)
 
         versions = db.list_versions(inode)
@@ -207,6 +207,39 @@ class TestMetadataDB:
         row = db.get_file_by_path("/bypath.txt")
         assert row is not None
         assert row["id"] == inode
+
+    def test_get_file_by_path_include_deleted(self, db: MetadataDB) -> None:
+        """include_deleted=True can resolve soft-deleted files."""
+        inode = db.create_file(parent_id=1, name="gone.txt", path="/gone.txt")
+        db.soft_delete_file(inode)
+        assert db.get_file_by_path("/gone.txt") is None
+        row = db.get_file_by_path("/gone.txt", include_deleted=True)
+        assert row is not None
+        assert row["id"] == inode
+
+    def test_set_file_deleted(self, db: MetadataDB) -> None:
+        """set_file_deleted toggles deletion state."""
+        inode = db.create_file(parent_id=1, name="toggle.txt", path="/toggle.txt")
+        db.set_file_deleted(inode, True)
+        assert db.get_file(inode) is None
+        db.set_file_deleted(inode, False)
+        row = db.get_file(inode)
+        assert row is not None
+        assert row["id"] == inode
+
+    def test_get_latest_version_before(self, db: MetadataDB) -> None:
+        """get_latest_version_before returns the newest eligible version."""
+        inode = db.create_file(parent_id=1, name="time.txt", path="/time.txt")
+        db.create_version(inode, "f" * 64, 1)
+        v2 = db.create_version(inode, "a" * 64, 2)
+
+        row = db.get_latest_version_before(inode, "9999-12-31 23:59:59")
+        assert row is not None
+        assert row["id"] == v2
+
+        # Before any created version should return None
+        row = db.get_latest_version_before(inode, "1970-01-01 00:00:00")
+        assert row is None
 
     def test_orphaned_objects(self, db: MetadataDB) -> None:
         """get_orphaned_objects returns objects with ref_count <= 0."""

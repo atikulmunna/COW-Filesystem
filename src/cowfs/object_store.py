@@ -6,6 +6,7 @@ directory structure (like git's .git/objects/).
 
 import hashlib
 import os
+from contextlib import suppress
 from pathlib import Path
 
 
@@ -101,10 +102,8 @@ class ObjectStore:
         size = obj_path.stat().st_size
         await trio.to_thread.run_sync(obj_path.unlink)
         # Clean up empty prefix directory
-        try:
+        with suppress(OSError):
             obj_path.parent.rmdir()  # only succeeds if empty
-        except OSError:
-            pass
         return size
 
     def delete_sync(self, obj_hash: str) -> int:
@@ -114,8 +113,6 @@ class ObjectStore:
             return 0
         size = obj_path.stat().st_size
         obj_path.unlink()
-        try:
+        with suppress(OSError):
             obj_path.parent.rmdir()
-        except OSError:
-            pass
         return size

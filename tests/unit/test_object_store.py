@@ -1,7 +1,5 @@
 """Unit tests for the COWFS object store."""
 
-import os
-import tempfile
 from pathlib import Path
 
 import pytest

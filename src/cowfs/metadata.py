@@ -7,6 +7,7 @@ is fast enough that thread offloading is only needed for bulk operations.
 
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 SCHEMA_SQL = """
 -- Format version tracking (checked on mount)
@@ -91,6 +92,7 @@ class MetadataDB:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self.db: sqlite3.Connection | None = None
+        self._manual_tx = False
 
     def connect(self) -> None:
         self.db = sqlite3.connect(str(self.db_path), check_same_thread=False)
@@ -110,6 +112,29 @@ class MetadataDB:
         if self.db:
             self.db.close()
             self.db = None
+            self._manual_tx = False
+
+    def begin(self) -> None:
+        assert self.db is not None
+        if self._manual_tx:
+            return
+        self.db.execute("BEGIN")
+        self._manual_tx = True
+
+    def commit(self) -> None:
+        assert self.db is not None
+        self.db.commit()
+        self._manual_tx = False
+
+    def rollback(self) -> None:
+        assert self.db is not None
+        self.db.rollback()
+        self._manual_tx = False
+
+    def _commit_if_needed(self) -> None:
+        assert self.db is not None
+        if not self._manual_tx:
+            self.db.commit()
 
     # ──────────────────────────── File operations ────────────────────────────
 
@@ -119,21 +144,24 @@ class MetadataDB:
             "SELECT * FROM files WHERE parent_id = ? AND name = ? AND is_deleted = FALSE",
             (parent_id, name),
         )
-        return cursor.fetchone()
+        return cast(sqlite3.Row | None, cursor.fetchone())
 
     def get_file(self, inode: int) -> sqlite3.Row | None:
         assert self.db is not None
         cursor = self.db.execute(
             "SELECT * FROM files WHERE id = ? AND is_deleted = FALSE", (inode,)
         )
-        return cursor.fetchone()
+        return cast(sqlite3.Row | None, cursor.fetchone())
 
-    def get_file_by_path(self, path: str) -> sqlite3.Row | None:
+    def get_file_by_path(self, path: str, include_deleted: bool = False) -> sqlite3.Row | None:
         assert self.db is not None
-        cursor = self.db.execute(
-            "SELECT * FROM files WHERE path = ? AND is_deleted = FALSE", (path,)
-        )
-        return cursor.fetchone()
+        if include_deleted:
+            cursor = self.db.execute("SELECT * FROM files WHERE path = ?", (path,))
+        else:
+            cursor = self.db.execute(
+                "SELECT * FROM files WHERE path = ? AND is_deleted = FALSE", (path,)
+            )
+        return cast(sqlite3.Row | None, cursor.fetchone())
 
     def list_children(self, parent_id: int) -> list[sqlite3.Row]:
         assert self.db is not None
@@ -163,13 +191,23 @@ class MetadataDB:
         assert cursor.lastrowid is not None
         return cursor.lastrowid
 
-    def soft_delete_file(self, inode: int) -> None:
+    def soft_delete_file(self, inode: int, *, commit: bool = True) -> None:
         assert self.db is not None
         self.db.execute(
             "UPDATE files SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (inode,),
         )
-        self.db.commit()
+        if commit:
+            self._commit_if_needed()
+
+    def set_file_deleted(self, inode: int, is_deleted: bool, *, commit: bool = True) -> None:
+        assert self.db is not None
+        self.db.execute(
+            "UPDATE files SET is_deleted = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (is_deleted, inode),
+        )
+        if commit:
+            self._commit_if_needed()
 
     def rename_file(
         self, inode: int, new_parent_id: int, new_name: str, new_path: str
@@ -230,7 +268,9 @@ class MetadataDB:
 
     # ──────────────────────────── Version operations ─────────────────────────
 
-    def create_version(self, file_id: int, object_hash: str, size_bytes: int) -> int:
+    def create_version(
+        self, file_id: int, object_hash: str, size_bytes: int, *, commit: bool = True
+    ) -> int:
         assert self.db is not None
         self.db.execute(
             """INSERT INTO objects (hash, size_bytes, ref_count)
@@ -249,7 +289,8 @@ class MetadataDB:
             "UPDATE files SET current_version_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (version_id, file_id),
         )
-        self.db.commit()
+        if commit:
+            self._commit_if_needed()
         return version_id
 
     def get_current_version(self, inode: int) -> sqlite3.Row | None:
@@ -260,14 +301,14 @@ class MetadataDB:
                WHERE f.id = ? AND f.is_deleted = FALSE""",
             (inode,),
         )
-        return cursor.fetchone()
+        return cast(sqlite3.Row | None, cursor.fetchone())
 
     def get_version(self, version_id: int) -> sqlite3.Row | None:
         assert self.db is not None
         cursor = self.db.execute(
             "SELECT * FROM versions WHERE id = ?", (version_id,)
         )
-        return cursor.fetchone()
+        return cast(sqlite3.Row | None, cursor.fetchone())
 
     def list_versions(self, file_id: int) -> list[sqlite3.Row]:
         assert self.db is not None
@@ -278,6 +319,83 @@ class MetadataDB:
         )
         return cursor.fetchall()
 
+    def get_latest_version_before(self, file_id: int, before: str) -> sqlite3.Row | None:
+        assert self.db is not None
+        cursor = self.db.execute(
+            """SELECT * FROM versions
+               WHERE file_id = ? AND is_deleted = FALSE AND created_at <= ?
+               ORDER BY created_at DESC, id DESC
+               LIMIT 1""",
+            (file_id, before),
+        )
+        return cast(sqlite3.Row | None, cursor.fetchone())
+
+    def list_prunable_versions(self, keep_last: int) -> list[sqlite3.Row]:
+        assert self.db is not None
+        cursor = self.db.execute(
+            """WITH ranked AS (
+                   SELECT v.*,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY v.file_id
+                              ORDER BY v.created_at DESC, v.id DESC
+                          ) AS rn
+                   FROM versions v
+                   WHERE v.is_deleted = FALSE
+               )
+               SELECT id, file_id, object_hash, size_bytes, created_at
+               FROM ranked
+               WHERE rn > ?
+               ORDER BY file_id ASC, created_at ASC, id ASC""",
+            (keep_last,),
+        )
+        return cursor.fetchall()
+
+    def prune_versions_keep_last(self, keep_last: int, *, commit: bool = True) -> list[sqlite3.Row]:
+        assert self.db is not None
+        rows = self.list_prunable_versions(keep_last)
+        for row in rows:
+            self.db.execute(
+                "DELETE FROM versions WHERE id = ?",
+                (row["id"],),
+            )
+            self.db.execute(
+                "UPDATE objects SET ref_count = ref_count - 1 WHERE hash = ?",
+                (row["object_hash"],),
+            )
+        if commit:
+            self._commit_if_needed()
+        return rows
+
+    def list_prunable_versions_before(self, before: str) -> list[sqlite3.Row]:
+        assert self.db is not None
+        cursor = self.db.execute(
+            """SELECT v.id, v.file_id, v.object_hash, v.size_bytes, v.created_at
+               FROM versions v
+               LEFT JOIN files f ON f.current_version_id = v.id
+               WHERE v.is_deleted = FALSE
+                 AND v.created_at < ?
+                 AND f.id IS NULL
+               ORDER BY v.file_id ASC, v.created_at ASC, v.id ASC""",
+            (before,),
+        )
+        return cursor.fetchall()
+
+    def prune_versions_before(self, before: str, *, commit: bool = True) -> list[sqlite3.Row]:
+        assert self.db is not None
+        rows = self.list_prunable_versions_before(before)
+        for row in rows:
+            self.db.execute(
+                "DELETE FROM versions WHERE id = ?",
+                (row["id"],),
+            )
+            self.db.execute(
+                "UPDATE objects SET ref_count = ref_count - 1 WHERE hash = ?",
+                (row["object_hash"],),
+            )
+        if commit:
+            self._commit_if_needed()
+        return rows
+
     # ──────────────────────────── Object operations ──────────────────────────
 
     def get_object(self, obj_hash: str) -> sqlite3.Row | None:
@@ -285,7 +403,7 @@ class MetadataDB:
         cursor = self.db.execute(
             "SELECT * FROM objects WHERE hash = ?", (obj_hash,)
         )
-        return cursor.fetchone()
+        return cast(sqlite3.Row | None, cursor.fetchone())
 
     def decrement_ref_count(self, obj_hash: str) -> int:
         assert self.db is not None
@@ -307,10 +425,83 @@ class MetadataDB:
         )
         return cursor.fetchall()
 
-    def delete_object_record(self, obj_hash: str) -> None:
+    def delete_object_record(self, obj_hash: str, *, commit: bool = True) -> None:
         assert self.db is not None
         self.db.execute("DELETE FROM objects WHERE hash = ?", (obj_hash,))
+        if commit:
+            self._commit_if_needed()
+
+    # ──────────────────────────── Snapshot operations ───────────────────────
+
+    def create_snapshot(self, name: str, description: str | None = None) -> int:
+        assert self.db is not None
+        cursor = self.db.execute(
+            "INSERT INTO snapshots (name, description) VALUES (?, ?)",
+            (name, description),
+        )
+        snapshot_id = cursor.lastrowid
+        assert snapshot_id is not None
+        self.db.execute(
+            """INSERT INTO snapshot_entries (snapshot_id, file_id, version_id)
+               SELECT ?, id, current_version_id
+               FROM files
+               WHERE is_deleted = FALSE AND is_dir = FALSE AND current_version_id IS NOT NULL""",
+            (snapshot_id,),
+        )
         self.db.commit()
+        return snapshot_id
+
+    def list_snapshots(self) -> list[sqlite3.Row]:
+        assert self.db is not None
+        cursor = self.db.execute(
+            """SELECT s.*, COUNT(se.id) AS file_count
+               FROM snapshots s
+               LEFT JOIN snapshot_entries se ON se.snapshot_id = s.id
+               GROUP BY s.id
+               ORDER BY s.created_at ASC, s.id ASC"""
+        )
+        return cursor.fetchall()
+
+    def get_snapshot_by_name(self, name: str) -> sqlite3.Row | None:
+        assert self.db is not None
+        cursor = self.db.execute("SELECT * FROM snapshots WHERE name = ?", (name,))
+        return cast(sqlite3.Row | None, cursor.fetchone())
+
+    def get_snapshot_entries(self, snapshot_id: int) -> list[sqlite3.Row]:
+        assert self.db is not None
+        cursor = self.db.execute(
+            """SELECT se.file_id, se.version_id
+               FROM snapshot_entries se
+               WHERE se.snapshot_id = ?""",
+            (snapshot_id,),
+        )
+        return cursor.fetchall()
+
+    def get_snapshot_entries_detailed(self, snapshot_id: int) -> list[sqlite3.Row]:
+        assert self.db is not None
+        cursor = self.db.execute(
+            """SELECT se.file_id, se.version_id, f.path, v.object_hash, v.size_bytes, v.created_at
+               FROM snapshot_entries se
+               JOIN files f ON f.id = se.file_id
+               JOIN versions v ON v.id = se.version_id
+               WHERE se.snapshot_id = ?
+               ORDER BY f.path ASC""",
+            (snapshot_id,),
+        )
+        return cursor.fetchall()
+
+    def delete_snapshot(self, snapshot_id: int) -> None:
+        assert self.db is not None
+        self.db.execute("DELETE FROM snapshot_entries WHERE snapshot_id = ?", (snapshot_id,))
+        self.db.execute("DELETE FROM snapshots WHERE id = ?", (snapshot_id,))
+        self.db.commit()
+
+    def list_active_file_ids(self) -> list[int]:
+        assert self.db is not None
+        cursor = self.db.execute(
+            "SELECT id FROM files WHERE is_deleted = FALSE AND is_dir = FALSE"
+        )
+        return [row["id"] for row in cursor.fetchall()]
 
     # ──────────────────────────── Stats ───────────────────────────────────────
 
