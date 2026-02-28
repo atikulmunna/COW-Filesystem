@@ -79,6 +79,12 @@ pip install -e ".[dev]"
 pytest
 ```
 
+## Release
+
+- Tag-based publishing is configured in `.github/workflows/publish.yml`.
+- See full release instructions in [RELEASE.md](RELEASE.md).
+- Expected tag format: `vX.Y.Z` (example: `v0.2.0`).
+
 ## Requirements
 
 - Linux with FUSE support (`libfuse3-dev`)
