@@ -1,5 +1,7 @@
 # COWFS - Copy-on-Write Filesystem
 
+[![PyPI](https://img.shields.io/pypi/v/cowfs)](https://pypi.org/project/cowfs/)
+
 A userspace Copy-on-Write filesystem built with FUSE. Every write transparently creates a new version - enabling instant restore, snapshot tagging, and content deduplication.
 
 ## Status
