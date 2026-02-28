@@ -84,3 +84,40 @@ jobs:
 
       - name: Publish package
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  verify-install:
+    name: Verify pip install
+    needs: publish
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse3-dev pkg-config build-essential python3-dev
+
+      - name: Install from PyPI
+        env:
+          PKG_VERSION: ${{ github.ref_name }}
+        run: |
+          python -m pip install --upgrade pip
+          VERSION="${PKG_VERSION#v}"
+          for i in {1..8}; do
+            if pip install "cowfs==${VERSION}"; then
+              break
+            fi
+            if [ "$i" -eq 8 ]; then
+              echo "Failed to install cowfs==${VERSION} after retries"
+              exit 1
+            fi
+            echo "Retry $i/8: package may not be visible yet, waiting..."
+            sleep 20
+          done
+
+      - name: Smoke test CLI
+        run: cowfs --help
