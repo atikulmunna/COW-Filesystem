@@ -268,3 +268,22 @@ class TestMetadataDB:
         assert events[2]["action"] == "DELETE"
         assert all(e["path"] == "/log.txt" for e in events)
         assert events[0]["version_id"] is not None
+
+    def test_list_events_filter_by_time_window(self, db: MetadataDB) -> None:
+        """list_events supports since/until datetime filtering."""
+        db.record_event("SNAPSHOT_CREATE", path="snapshot:alpha")
+        db.record_event("SNAPSHOT_DELETE", path="snapshot:alpha")
+
+        events = db.list_events(
+            limit=10,
+            since="1970-01-01 00:00:00",
+            until="9999-12-31 23:59:59",
+        )
+        assert len(events) == 2
+
+        none = db.list_events(
+            limit=10,
+            since="9999-12-31 23:59:59",
+            until="9999-12-31 23:59:59",
+        )
+        assert none == []

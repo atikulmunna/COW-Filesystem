@@ -163,3 +163,57 @@ def test_log_command_json_and_limit(tmp_path: Path) -> None:
     assert len(rows) == 2
     assert rows[-1]["action"] == "SNAPSHOT_CREATE"
     assert rows[-1]["path"] == "snapshot:baseline"
+
+
+def test_log_command_filters_action_and_path_prefix(tmp_path: Path) -> None:
+    storage = tmp_path / "storage"
+    _init_storage(storage)
+    _seed_versions(storage)
+
+    db = MetadataDB(storage / "metadata.db")
+    db.connect()
+    db.record_event("SNAPSHOT_CREATE", path="snapshot:baseline")
+    db.record_event("SNAPSHOT_DELETE", path="snapshot:baseline")
+    db.close()
+
+    runner = CliRunner()
+    out = runner.invoke(
+        cli.app,
+        [
+            "log",
+            "--storage",
+            str(storage),
+            "--action",
+            "SNAPSHOT_CREATE",
+            "--path-prefix",
+            "snapshot:",
+            "--json",
+        ],
+    )
+    assert out.exit_code == 0
+    rows = json.loads(out.stdout)
+    assert len(rows) == 1
+    assert rows[0]["action"] == "SNAPSHOT_CREATE"
+    assert rows[0]["path"] == "snapshot:baseline"
+
+
+def test_log_command_bad_time_window(tmp_path: Path) -> None:
+    storage = tmp_path / "storage"
+    _init_storage(storage)
+    _seed_versions(storage)
+
+    runner = CliRunner()
+    out = runner.invoke(
+        cli.app,
+        [
+            "log",
+            "--storage",
+            str(storage),
+            "--since",
+            "2026-01-02 00:00:00",
+            "--until",
+            "2026-01-01 00:00:00",
+            "--json",
+        ],
+    )
+    assert out.exit_code == 1

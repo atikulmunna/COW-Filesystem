@@ -19,6 +19,36 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Validate tag/version parity
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import sys
+          import tomllib
+
+          ref_name = os.environ["GITHUB_REF_NAME"]
+          if not ref_name.startswith("v"):
+              print(f"Unexpected tag format: {ref_name}", file=sys.stderr)
+              sys.exit(1)
+
+          tag_version = ref_name[1:]
+          pyproject = pathlib.Path("pyproject.toml")
+          data = tomllib.loads(pyproject.read_text())
+          project_version = data["project"]["version"]
+
+          if tag_version != project_version:
+              print(
+                  f"Tag/version mismatch: tag={tag_version} pyproject={project_version}",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print(f"Tag/version parity OK: {project_version}")
+          PY
+
       - name: Install build tools
         run: |
           python -m pip install --upgrade pip

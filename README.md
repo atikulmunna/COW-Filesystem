@@ -58,7 +58,7 @@ cowfs umount <mount_point>
 
 cowfs history <file_path> --storage <storage_dir> [--json]
 cowfs restore <file_path> (--version <n> | --before "<datetime>") --storage <storage_dir> [--dry-run] [--json]
-cowfs log --storage <storage_dir> [--limit <n>] [--json]
+cowfs log --storage <storage_dir> [--limit <n>] [--action <name>] [--path-prefix <prefix>] [--since "<datetime>"] [--until "<datetime>"] [--json]
 
 cowfs stats --storage <storage_dir> [--json]
 cowfs gc --storage <storage_dir> [--dry-run] [--keep-last <n>] [--before "<datetime>"] [--json]

@@ -346,6 +346,10 @@ def history(
 def log(
     storage_dir: str = typer.Option(None, "--storage", "-s"),
     limit: int = typer.Option(50, "--limit", "-n", min=1, max=5000),
+    action: str | None = typer.Option(None, "--action", help="Filter by action"),
+    path_prefix: str | None = typer.Option(None, "--path-prefix", help="Filter by path prefix"),
+    since: str | None = typer.Option(None, "--since", help="Include events since datetime"),
+    until: str | None = typer.Option(None, "--until", help="Include events until datetime"),
     output_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Show chronological activity feed across files and snapshots."""
@@ -359,7 +363,23 @@ def log(
     db = MetadataDB(storage_path / "metadata.db")
     db.connect()
     try:
-        events = db.list_events(limit=limit)
+        since_sql = None
+        until_sql = None
+        if since is not None:
+            since_sql = _parse_datetime(since).strftime("%Y-%m-%d %H:%M:%S")
+        if until is not None:
+            until_sql = _parse_datetime(until).strftime("%Y-%m-%d %H:%M:%S")
+        if since_sql is not None and until_sql is not None and since_sql > until_sql:
+            console.print("[red]Error:[/red] --since must be earlier than or equal to --until")
+            raise typer.Exit(1)
+
+        events = db.list_events(
+            limit=limit,
+            action=action,
+            path_prefix=path_prefix,
+            since=since_sql,
+            until=until_sql,
+        )
         if output_json:
             data = [
                 {

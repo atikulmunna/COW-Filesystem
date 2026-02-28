@@ -561,14 +561,42 @@ class MetadataDB:
             self._commit_if_needed()
         return event_id
 
-    def list_events(self, limit: int = 50) -> list[sqlite3.Row]:
+    def list_events(
+        self,
+        limit: int = 50,
+        *,
+        action: str | None = None,
+        path_prefix: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> list[sqlite3.Row]:
         assert self.db is not None
+        where_parts: list[str] = []
+        params: list[str | int] = []
+        if action is not None:
+            where_parts.append("action = ?")
+            params.append(action)
+        if path_prefix is not None:
+            where_parts.append("path LIKE ?")
+            params.append(path_prefix + "%")
+        if since is not None:
+            where_parts.append("created_at >= ?")
+            params.append(since)
+        if until is not None:
+            where_parts.append("created_at <= ?")
+            params.append(until)
+
+        where_sql = ""
+        if where_parts:
+            where_sql = "WHERE " + " AND ".join(where_parts)
+        params.append(limit)
         cursor = self.db.execute(
-            """SELECT created_at, action, path, version_id, object_hash
+            f"""SELECT created_at, action, path, version_id, object_hash
                FROM events
+               {where_sql}
                ORDER BY created_at DESC, id DESC
                LIMIT ?""",
-            (limit,),
+            tuple(params),
         )
         rows = cursor.fetchall()
         rows.reverse()
