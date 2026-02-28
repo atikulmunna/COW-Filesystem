@@ -1,6 +1,6 @@
-# COWFS — Copy-on-Write Filesystem
+# COWFS - Copy-on-Write Filesystem
 
-A userspace Copy-on-Write filesystem built with FUSE. Every write transparently creates a new version — enabling instant restore, snapshot tagging, and content deduplication.
+A userspace Copy-on-Write filesystem built with FUSE. Every write transparently creates a new version - enabling instant restore, snapshot tagging, and content deduplication.
 
 ## Status
 
