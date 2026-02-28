@@ -67,12 +67,23 @@ CREATE TABLE IF NOT EXISTS snapshot_entries (
     version_id INTEGER NOT NULL REFERENCES versions(id)
 );
 
+-- Chronological activity feed
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL,
+    path TEXT,
+    version_id INTEGER,
+    object_hash TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Performance indexes
 CREATE INDEX IF NOT EXISTS idx_versions_file_id ON versions(file_id);
 CREATE INDEX IF NOT EXISTS idx_versions_object_hash ON versions(object_hash);
 CREATE INDEX IF NOT EXISTS idx_snapshot_entries_snapshot_id ON snapshot_entries(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
 CREATE INDEX IF NOT EXISTS idx_files_parent ON files(parent_id, name);
+CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
 """
 
 ROOT_INODE_SQL = """
@@ -191,12 +202,21 @@ class MetadataDB:
         assert cursor.lastrowid is not None
         return cursor.lastrowid
 
-    def soft_delete_file(self, inode: int, *, commit: bool = True) -> None:
+    def soft_delete_file(
+        self,
+        inode: int,
+        *,
+        commit: bool = True,
+        action: str = "DELETE",
+    ) -> None:
         assert self.db is not None
+        file_row = self.get_file(inode)
+        path = file_row["path"] if file_row is not None else None
         self.db.execute(
             "UPDATE files SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (inode,),
         )
+        self.record_event(action, path=path, commit=False)
         if commit:
             self._commit_if_needed()
 
@@ -269,7 +289,13 @@ class MetadataDB:
     # ──────────────────────────── Version operations ─────────────────────────
 
     def create_version(
-        self, file_id: int, object_hash: str, size_bytes: int, *, commit: bool = True
+        self,
+        file_id: int,
+        object_hash: str,
+        size_bytes: int,
+        *,
+        commit: bool = True,
+        action: str = "WRITE",
     ) -> int:
         assert self.db is not None
         self.db.execute(
@@ -288,6 +314,15 @@ class MetadataDB:
         self.db.execute(
             "UPDATE files SET current_version_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (version_id, file_id),
+        )
+        file_row = self.get_file(file_id)
+        path = file_row["path"] if file_row is not None else None
+        self.record_event(
+            action,
+            path=path,
+            version_id=version_id,
+            object_hash=object_hash,
+            commit=False,
         )
         if commit:
             self._commit_if_needed()
@@ -502,6 +537,42 @@ class MetadataDB:
             "SELECT id FROM files WHERE is_deleted = FALSE AND is_dir = FALSE"
         )
         return [row["id"] for row in cursor.fetchall()]
+
+    # ──────────────────────────── Event operations ──────────────────────────
+
+    def record_event(
+        self,
+        action: str,
+        *,
+        path: str | None = None,
+        version_id: int | None = None,
+        object_hash: str | None = None,
+        commit: bool = True,
+    ) -> int:
+        assert self.db is not None
+        cursor = self.db.execute(
+            """INSERT INTO events (action, path, version_id, object_hash)
+               VALUES (?, ?, ?, ?)""",
+            (action, path, version_id, object_hash),
+        )
+        event_id = cursor.lastrowid
+        assert event_id is not None
+        if commit:
+            self._commit_if_needed()
+        return event_id
+
+    def list_events(self, limit: int = 50) -> list[sqlite3.Row]:
+        assert self.db is not None
+        cursor = self.db.execute(
+            """SELECT created_at, action, path, version_id, object_hash
+               FROM events
+               ORDER BY created_at DESC, id DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        rows = cursor.fetchall()
+        rows.reverse()
+        return rows
 
     # ──────────────────────────── Stats ───────────────────────────────────────
 

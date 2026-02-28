@@ -258,7 +258,11 @@ def restore(
 
         if not dry_run:
             db.create_version(
-                file_row["id"], target["object_hash"], target["size_bytes"], commit=False
+                file_row["id"],
+                target["object_hash"],
+                target["size_bytes"],
+                commit=False,
+                action="RESTORE",
             )
             if file_row["is_deleted"]:
                 db.set_file_deleted(file_row["id"], False, commit=False)
@@ -334,6 +338,59 @@ def history(
                     v["object_hash"][:12] + "...",
                 )
             console.print(table)
+    finally:
+        db.close()
+
+
+@app.command()
+def log(
+    storage_dir: str = typer.Option(None, "--storage", "-s"),
+    limit: int = typer.Option(50, "--limit", "-n", min=1, max=5000),
+    output_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """Show chronological activity feed across files and snapshots."""
+    from cowfs.metadata import MetadataDB
+
+    storage_path = _resolve_storage(storage_dir)
+    if storage_path is None:
+        console.print("[red]Error:[/red] Could not find storage directory. Use --storage.")
+        raise typer.Exit(1)
+
+    db = MetadataDB(storage_path / "metadata.db")
+    db.connect()
+    try:
+        events = db.list_events(limit=limit)
+        if output_json:
+            data = [
+                {
+                    "time": row["created_at"],
+                    "action": row["action"],
+                    "path": row["path"],
+                    "version_id": row["version_id"],
+                    "hash": row["object_hash"],
+                }
+                for row in events
+            ]
+            console.print_json(json.dumps(data))
+            return
+
+        table = Table(title=f"Activity Log (last {len(events)})")
+        table.add_column("Time")
+        table.add_column("Action", style="bold")
+        table.add_column("Path")
+        table.add_column("Version")
+        table.add_column("Hash")
+        for row in events:
+            version = str(row["version_id"]) if row["version_id"] is not None else "-"
+            short_hash = (row["object_hash"][:12] + "...") if row["object_hash"] else "-"
+            table.add_row(
+                row["created_at"],
+                row["action"],
+                row["path"] or "-",
+                version,
+                short_hash,
+            )
+        console.print(table)
     finally:
         db.close()
 
@@ -651,6 +708,7 @@ def snapshot_create(
         except sqlite3.IntegrityError as e:
             console.print(f"[red]Error:[/red] Snapshot already exists: {name}")
             raise typer.Exit(1) from e
+        db.record_event("SNAPSHOT_CREATE", path=f"snapshot:{name}")
         snapshot = db.get_snapshot_by_name(name)
         file_count = len(db.get_snapshot_entries(snapshot_id))
         result = {
@@ -733,12 +791,12 @@ def snapshot_delete(
     db = MetadataDB(storage_path / "metadata.db")
     db.connect()
     try:
-        db.begin()
         snapshot = db.get_snapshot_by_name(name)
         if snapshot is None:
             console.print(f"[red]Error:[/red] Snapshot not found: {name}")
             raise typer.Exit(1)
         db.delete_snapshot(snapshot["id"])
+        db.record_event("SNAPSHOT_DELETE", path=f"snapshot:{name}")
         result = {"deleted": True, "name": name}
         if output_json:
             console.print_json(json.dumps(result))
@@ -851,9 +909,11 @@ def snapshot_restore(
                     version["object_hash"],
                     version["size_bytes"],
                     commit=False,
+                    action="SNAPSHOT_RESTORE",
                 )
                 db.set_file_deleted(entry["file_id"], False, commit=False)
                 files_restored += 1
+            db.record_event("SNAPSHOT_RESTORE", path=f"snapshot:{name}", commit=False)
         else:
             files_restored = len(entries)
 

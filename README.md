@@ -9,7 +9,7 @@ A userspace Copy-on-Write filesystem built with FUSE. Every write transparently 
 - GC implemented (`--dry-run`, `--keep-last`, `--before`)
 - Snapshot lifecycle implemented (`create`, `list`, `show`, `restore`, `delete`)
 - GitHub Actions CI workflow added (tests + coverage + required static analysis)
-- release/publish polish items are still pending
+- Tag-based PyPI publishing implemented and validated (`cowfs` 0.2.1 live)
 
 ## Quick Start
 
@@ -26,6 +26,7 @@ echo "world" > ~/mnt/test.txt
 # Inspect version history and stats
 cowfs history /test.txt --storage ~/storage
 cowfs stats --storage ~/storage
+cowfs log --storage ~/storage --limit 20
 
 # Restore to an older version
 cowfs restore /test.txt --version 1 --storage ~/storage
@@ -57,6 +58,7 @@ cowfs umount <mount_point>
 
 cowfs history <file_path> --storage <storage_dir> [--json]
 cowfs restore <file_path> (--version <n> | --before "<datetime>") --storage <storage_dir> [--dry-run] [--json]
+cowfs log --storage <storage_dir> [--limit <n>] [--json]
 
 cowfs stats --storage <storage_dir> [--json]
 cowfs gc --storage <storage_dir> [--dry-run] [--keep-last <n>] [--before "<datetime>"] [--json]
@@ -84,6 +86,22 @@ pytest
 - Tag-based publishing is configured in `.github/workflows/publish.yml`.
 - See full release instructions in [RELEASE.md](RELEASE.md).
 - Expected tag format: `vX.Y.Z` (example: `v0.2.0`).
+
+### Release Checklist
+
+```bash
+# 1) bump version in pyproject.toml (example: 0.2.2)
+git add pyproject.toml
+git commit -m "Release 0.2.2"
+git push origin master
+
+# 2) create matching release tag
+git tag v0.2.2
+git push origin v0.2.2
+
+# 3) after Publish workflow succeeds, verify install
+pip install -U cowfs==0.2.2
+```
 
 ## Requirements
 

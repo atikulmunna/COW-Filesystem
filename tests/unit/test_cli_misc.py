@@ -140,3 +140,26 @@ def test_parse_datetime_and_human_size() -> None:
     assert dt.year == 2026
     assert cli._human_size(0) == "0 B"
     assert cli._human_size(1024).endswith("KB")
+
+
+def test_log_command_json_and_limit(tmp_path: Path) -> None:
+    storage = tmp_path / "storage"
+    _init_storage(storage)
+    inode = _seed_versions(storage)
+
+    db = MetadataDB(storage / "metadata.db")
+    db.connect()
+    db.soft_delete_file(inode)
+    db.record_event("SNAPSHOT_CREATE", path="snapshot:baseline")
+    db.close()
+
+    runner = CliRunner()
+    out = runner.invoke(
+        cli.app,
+        ["log", "--storage", str(storage), "--limit", "2", "--json"],
+    )
+    assert out.exit_code == 0
+    rows = json.loads(out.stdout)
+    assert len(rows) == 2
+    assert rows[-1]["action"] == "SNAPSHOT_CREATE"
+    assert rows[-1]["path"] == "snapshot:baseline"

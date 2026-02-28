@@ -251,3 +251,20 @@ class TestMetadataDB:
         orphans = db.get_orphaned_objects()
         hashes = {o["hash"] for o in orphans}
         assert h in hashes
+
+    def test_activity_events_from_versions_and_delete(self, db: MetadataDB) -> None:
+        """Version writes and file deletions are captured in the events feed."""
+        inode = db.create_file(parent_id=1, name="log.txt", path="/log.txt")
+        h1 = "1" * 64
+        h2 = "2" * 64
+        db.create_version(inode, h1, 10, action="WRITE")
+        db.create_version(inode, h2, 20, action="RESTORE")
+        db.soft_delete_file(inode)
+
+        events = db.list_events(limit=10)
+        assert len(events) == 3
+        assert events[0]["action"] == "WRITE"
+        assert events[1]["action"] == "RESTORE"
+        assert events[2]["action"] == "DELETE"
+        assert all(e["path"] == "/log.txt" for e in events)
+        assert events[0]["version_id"] is not None

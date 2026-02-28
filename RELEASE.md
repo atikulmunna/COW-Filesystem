@@ -4,7 +4,6 @@ This project publishes to PyPI from GitHub Actions when a tag matching `v*` is p
 
 Workflow file:
 - `.github/workflows/publish.yml`
-- `.github/workflows/publish-testpypi.yml` (manual TestPyPI rehearsal)
 
 ## Prerequisites
 
@@ -51,12 +50,12 @@ Workflow file:
 
 Before first real publish, validate packaging with TestPyPI.
 
-1. Ensure GitHub Actions environment `testpypi` is configured with Trusted Publishing.
-2. Bump to a pre-release version like `0.2.0rc1` in `pyproject.toml` and push to `master`.
-3. In GitHub Actions, run `Publish TestPyPI` manually (`workflow_dispatch`), optionally setting `ref`.
+1. Configure a TestPyPI trusted publisher for this repository/workflow claims.
+2. Bump to a pre-release version like `0.2.0rc1` in `pyproject.toml`.
+3. Build and publish to TestPyPI from a temporary release workflow or local `twine` upload.
 4. Install from TestPyPI and sanity check:
    ```bash
-   pip install -i https://test.pypi.org/simple/ cowfs==0.2.0rc1
+   pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple cowfs==0.2.0rc1
    ```
 
 ## Rollback Notes
