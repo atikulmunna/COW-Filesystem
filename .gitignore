@@ -21,6 +21,7 @@ venv/
 .coverage
 htmlcov/
 .pytest_cache/
+site/
 
 # COWFS test artifacts
 test_storage/

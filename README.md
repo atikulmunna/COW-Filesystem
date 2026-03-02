@@ -83,6 +83,15 @@ pip install -e ".[dev]"
 pytest
 ```
 
+## Documentation Site
+
+```bash
+pip install -e ".[docs]"
+mkdocs serve
+# build static site:
+mkdocs build
+```
+
 ## Release
 
 - Tag-based publishing is configured in `.github/workflows/publish.yml`.

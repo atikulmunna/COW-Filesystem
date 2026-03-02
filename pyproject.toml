@@ -41,6 +41,10 @@ dev = [
     "pre-commit>=3.6",
     "black>=24.0",
 ]
+docs = [
+    "mkdocs>=1.6.0,<2.0.0",
+    "mkdocs-material>=9.5.0",
+]
 blake3 = [
     "blake3>=0.4.0",
 ]
