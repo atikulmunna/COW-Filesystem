@@ -20,7 +20,7 @@ jobs:
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfuse3-dev pkg-config
+          sudo apt-get install -y libfuse3-dev pkg-config build-essential python3-dev
 
       - name: Install project deps
         run: |
@@ -29,7 +29,11 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          pytest --cov=src/cowfs --cov-report=term-missing --cov-report=xml --cov-fail-under=75
+          pytest tests/unit tests/integration tests/stress \
+            --cov=src/cowfs \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-fail-under=75
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4

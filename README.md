@@ -11,7 +11,7 @@ A userspace Copy-on-Write filesystem built with FUSE. Every write transparently 
 - GC implemented (`--dry-run`, `--keep-last`, `--before`)
 - Snapshot lifecycle implemented (`create`, `list`, `show`, `restore`, `delete`)
 - GitHub Actions CI workflow added (tests + coverage + required static analysis)
-- Tag-based PyPI publishing implemented and validated (`cowfs` 0.2.1 live)
+- Tag-based PyPI publishing implemented and validated (`cowfs` 0.2.4 live)
 
 ## Quick Start
 

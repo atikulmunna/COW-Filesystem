@@ -914,40 +914,40 @@ if __name__ == "__main__":
 
 **Goal:** Full version management — restore any file to any version, snapshot entire filesystem, garbage collect orphaned objects.
 
-- [ ] Implement `cowfs restore <file> --version <n>`
-- [ ] Implement `cowfs restore <file> --before <datetime>`
-- [ ] Implement restore of deleted files
-- [ ] Implement `cowfs snapshot create <name>`
-- [ ] Implement `cowfs snapshot list`
-- [ ] Implement `cowfs snapshot restore <name>`
-- [ ] Implement `cowfs snapshot delete <name>`
-- [ ] Implement `cowfs gc` (collect unreferenced objects)
-- [ ] Implement `cowfs gc --keep-last <n>`
-- [ ] Implement `cowfs gc --dry-run`
-- [ ] Implement `cowfs diff <file> --v1 <n> --v2 <m>` using difflib
-- [ ] Write tests for restore correctness (byte-for-byte verification)
-- [ ] Write tests for GC (verify orphaned objects deleted, referenced objects retained)
-- [ ] Write tests for snapshot create/restore cycle
-- [ ] **Checkpoint:** Delete a file, restore it from history; take snapshot, modify files, restore snapshot
+- [x] Implement `cowfs restore <file> --version <n>`
+- [x] Implement `cowfs restore <file> --before <datetime>`
+- [x] Implement restore of deleted files
+- [x] Implement `cowfs snapshot create <name>`
+- [x] Implement `cowfs snapshot list`
+- [x] Implement `cowfs snapshot restore <name>`
+- [x] Implement `cowfs snapshot delete <name>`
+- [x] Implement `cowfs gc` (collect unreferenced objects)
+- [x] Implement `cowfs gc --keep-last <n>`
+- [x] Implement `cowfs gc --dry-run`
+- [x] Implement `cowfs diff <file> --v1 <n> --v2 <m>` using difflib
+- [x] Write tests for restore correctness (byte-for-byte verification)
+- [x] Write tests for GC (verify orphaned objects deleted, referenced objects retained)
+- [x] Write tests for snapshot create/restore cycle
+- [x] **Checkpoint:** Delete a file, restore it from history; take snapshot, modify files, restore snapshot
 
 ### Phase 4 — Polish, Performance & Release (Week 4)
 
 **Goal:** Production-quality code, good docs, PyPI publication, compelling demo.
 
-- [ ] Add structured logging (Python `logging` module, configurable level)
-- [ ] Add `--debug` flag to mount command for verbose FUSE operation logging
+- [x] Add structured logging (Python `logging` module, configurable level)
+- [x] Add `--debug` flag to mount command for verbose FUSE operation logging
 - [ ] Implement durability guarantees (fsync before SQLite commit)
 - [ ] Handle edge cases: empty files, binary files, large files (>100MB), unicode paths
-- [ ] Write stress test: 1000 writes, verify version count and dedup ratio
-- [ ] Achieve >75% test coverage (`pytest --cov`)
+- [x] Write stress test: 1000 writes, verify version count and dedup ratio
+- [x] Achieve >75% test coverage (`pytest --cov`)
 - [ ] Write comprehensive README with architecture diagram, install guide, usage examples
 - [ ] Create demo GIF (terminalizer or asciinema)
-- [ ] Set up GitHub Actions CI (lint → typecheck → test → coverage report)
-- [ ] Configure PyPI publication workflow
-- [ ] Publish to PyPI (`pip install cowfs`)
+- [x] Set up GitHub Actions CI (lint → typecheck → test → coverage report)
+- [x] Configure PyPI publication workflow
+- [x] Publish to PyPI (`pip install cowfs`)
 - [ ] Write MkDocs documentation site
 - [ ] Record YouTube demo walkthrough
-- [ ] **Checkpoint:** `pip install cowfs` works; full demo runnable in 5 minutes
+- [x] **Checkpoint:** `pip install cowfs` works; full demo runnable in 5 minutes
 
 ---
 
