@@ -80,9 +80,8 @@ class COWFS(pyfuse3.Operations):
         self._inode_size_cache.pop(inode, None)
 
     def _get_current_hash_and_size(self, inode: int) -> tuple[str, int]:
-        if inode in self._inode_hash_cache:
-            return self._inode_hash_cache[inode], self._inode_size_cache[inode]
-
+        # Always consult metadata so external operations (e.g., CLI restore/snapshot restore)
+        # are visible to the mounted daemon without requiring a remount.
         version = self.db.get_current_version(inode)
         if version is None:
             return ObjectStore.EMPTY_HASH, 0
