@@ -27,7 +27,9 @@ git push origin vX.Y.Z
 ```bash
 python -m venv /tmp/cowfs-verify
 source /tmp/cowfs-verify/bin/activate
-pip install -U cowfs==X.Y.Z
+python -m pip install -U pip
+python -m pip install --no-cache-dir cowfs==X.Y.Z
+python -c "import cowfs; print(cowfs.__version__)"
 cowfs --help
 ```
 

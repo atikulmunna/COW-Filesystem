@@ -14,11 +14,20 @@ and storage deduplication.
 - Version diff and chronological activity log
 - CLI built with Typer + Rich
 
-## Install
+## Install (Linux/WSL2)
 
 ```bash
-pip install cowfs
+python -m venv /tmp/cowfs-test
+source /tmp/cowfs-test/bin/activate
+sudo apt-get update
+sudo apt-get install -y libfuse3-dev pkg-config build-essential python3-dev
+python -m pip install -U pip
+python -m pip install --no-cache-dir cowfs==0.2.8
+cowfs --help
 ```
+
+Windows native PowerShell supports install and CLI help, but mount is Linux-only.
+Use WSL2 Ubuntu for filesystem mounting.
 
 ## Quick Start
 
@@ -47,3 +56,9 @@ cowfs umount ~/mnt
 - Linux with FUSE support (`libfuse3-dev`)
 - Python 3.11+
 - Windows users should run COWFS in WSL2 (Ubuntu)
+
+## Next Pages
+
+- CLI commands: `CLI Reference`
+- Test commands: `Testing`
+- Error handling and fixes: `Troubleshooting`

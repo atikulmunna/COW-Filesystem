@@ -20,4 +20,6 @@ nav:
   - Home: index.md
   - Architecture: architecture.md
   - CLI Reference: cli.md
+  - Testing: testing.md
+  - Troubleshooting: troubleshooting.md
   - Release Guide: release.md
