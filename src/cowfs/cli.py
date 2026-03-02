@@ -2,22 +2,21 @@
 
 import difflib
 import fcntl
+import importlib.util
 import json
 import logging
 import os
+import platform
 import sqlite3
 import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import pyfuse3
 import trio
 import typer
 from rich.console import Console
 from rich.table import Table
-
-from cowfs.fuse_handler import COWFS
 
 app = typer.Typer(
     name="cowfs",
@@ -87,6 +86,20 @@ def mount(
     hash_algo: str = typer.Option("sha256", "--hash-algo"),
 ) -> None:
     """Mount the COWFS filesystem."""
+    if platform.system() != "Linux":
+        console.print(
+            "[red]Error:[/red] COWFS mount is supported on Linux only. "
+            "Use WSL2 (Ubuntu) on Windows."
+        )
+        raise typer.Exit(1)
+
+    if importlib.util.find_spec("pyfuse3") is None:
+        console.print(
+            "[red]Error:[/red] Missing FUSE dependency `pyfuse3`. "
+            "Install Linux system deps: libfuse3-dev, pkg-config, build-essential, python3-dev."
+        )
+        raise typer.Exit(1)
+
     storage_path = Path(storage_dir).resolve()
     mount_path = Path(mount_point).resolve()
 
@@ -141,6 +154,10 @@ def mount(
 
 
 async def _run_fuse(storage_path: Path, mount_path: Path, debug: bool) -> None:
+    import pyfuse3
+
+    from cowfs.fuse_handler import COWFS
+
     fs = COWFS(str(storage_path))
     fs.init()
 

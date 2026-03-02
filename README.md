@@ -118,3 +118,4 @@ pip install -U cowfs==0.2.2
 
 - Linux with FUSE support (`libfuse3-dev`)
 - Python 3.11+
+- Windows: use WSL2 (Ubuntu) for mount functionality

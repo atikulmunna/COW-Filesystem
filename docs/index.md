@@ -46,3 +46,4 @@ cowfs umount ~/mnt
 
 - Linux with FUSE support (`libfuse3-dev`)
 - Python 3.11+
+- Windows users should run COWFS in WSL2 (Ubuntu)
