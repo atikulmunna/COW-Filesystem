@@ -86,7 +86,7 @@ pytest
 ## Documentation Site
 
 ```bash
-pip install -e ".[docs]"
+pip install "mkdocs>=1.6.0,<2.0.0" "mkdocs-material>=9.5.0"
 mkdocs serve
 # build static site:
 mkdocs build
