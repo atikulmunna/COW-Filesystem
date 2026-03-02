@@ -46,7 +46,7 @@ def test_lock_helpers_error_path(monkeypatch, tmp_path: Path) -> None:
     def bad_flock(fd: int, op: int) -> None:  # type: ignore[no-untyped-def]
         raise OSError("busy")
 
-    monkeypatch.setattr(cli.fcntl, "flock", bad_flock)
+    monkeypatch.setattr("fcntl.flock", bad_flock)
     runner = CliRunner()
     # Trigger _acquire_lock via mount with empty mount path and valid storage marker.
     (storage / cli.FORMAT_MARKER_FILE).write_text(json.dumps({"version": 1, "hash_algo": "sha256"}))

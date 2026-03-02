@@ -1,7 +1,6 @@
 """COWFS CLI — companion command-line tool for the COW filesystem."""
 
 import difflib
-import fcntl
 import importlib.util
 import json
 import logging
@@ -55,6 +54,8 @@ def _write_format_marker(storage_dir: Path, hash_algo: str = "sha256") -> None:
 
 
 def _acquire_lock(storage_dir: Path) -> int:
+    import fcntl
+
     lock_path = storage_dir / LOCK_FILE
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
     try:
@@ -70,6 +71,8 @@ def _acquire_lock(storage_dir: Path) -> int:
 
 
 def _release_lock(fd: int) -> None:
+    import fcntl
+
     try:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
