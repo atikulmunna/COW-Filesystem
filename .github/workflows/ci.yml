@@ -94,7 +94,18 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force C:\temp\cowfs-storage | Out-Null
           New-Item -ItemType Directory -Force C:\temp\cowfs-mnt | Out-Null
-          cowfs mount C:\temp\cowfs-storage C:\temp\cowfs-mnt 2>&1 | Out-String | Write-Host
-          if ($LASTEXITCODE -eq 0) {
+          $stdout = Join-Path $env:RUNNER_TEMP "cowfs-mount-out.txt"
+          $stderr = Join-Path $env:RUNNER_TEMP "cowfs-mount-err.txt"
+          $proc = Start-Process `
+            -FilePath "cowfs" `
+            -ArgumentList @("mount", "C:\temp\cowfs-storage", "C:\temp\cowfs-mnt") `
+            -Wait `
+            -PassThru `
+            -NoNewWindow `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr
+          Get-Content $stdout -ErrorAction SilentlyContinue | Write-Host
+          Get-Content $stderr -ErrorAction SilentlyContinue | Write-Host
+          if ($proc.ExitCode -eq 0) {
             throw "Expected non-zero exit code for mount on Windows"
           }
